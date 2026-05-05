@@ -116,7 +116,7 @@ def fetch_newsletters(service):
 
 def call_claude(client, system, user, max_tokens=1000):
     resp = client.messages.create(
-        model="claude-opus-4-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],
