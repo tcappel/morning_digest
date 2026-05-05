@@ -12,6 +12,7 @@ import json
 import time
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -317,7 +318,7 @@ def main():
             time.sleep(1)
 
     log.info("[5/5] Building and sending email…")
-    now     = datetime.now()
+    now     = datetime.now(ZoneInfo("America/Chicago"))
     subject = f"☕ Morning Digest — {now.strftime('%A, %B %-d')}"
     html    = build_html_email(emails, digest, briefing, summaries, now)
     send_email(service, subject, html)
