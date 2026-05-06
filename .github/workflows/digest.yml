@@ -2,23 +2,31 @@ name: Morning Digest
 
 on:
   schedule:
-    - cron: '30 13 * * 1-5'  # 8:30 AM CT (CDT, UTC-5) Mon-Fri
-  workflow_dispatch:  # allows manual trigger from GitHub
+    - cron: '30 13 * * 1-5'  # 8:30 AM CT (CDT UTC-5) Mon-Fri — daily digest
+    - cron: '0 18 * * 5'     # 12:00 PM CT (CDT UTC-5) Friday — weekly read later
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Which digest to run'
+        required: true
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - weekly
 
 jobs:
-  send-digest:
+  daily-digest:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily' || github.event.schedule == '30 13 * * 1-5'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Run digest
+      - name: Run daily digest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
@@ -27,3 +35,23 @@ jobs:
           SEND_TO_EMAIL: timcappel1@gmail.com
           GMAIL_LABEL: Newsletters
         run: python digest.py
+
+  weekly-digest:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'weekly' || github.event.schedule == '0 18 * * 5'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run weekly read later digest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          SEND_TO_EMAIL: timcappel1@gmail.com
+          GMAIL_LABEL: Newsletters
+        run: python weekly_digest.py
