@@ -39,6 +39,7 @@ GMAIL_CLIENT_SECRET = os.environ["GMAIL_CLIENT_SECRET"]
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
 ]
 
 
@@ -301,6 +302,87 @@ def send_email(service, subject, html_body):
     log.info(f"Weekly digest sent to {SEND_TO_EMAIL}")
 
 
+
+# ── Archive ───────────────────────────────────────────────────────────────────
+
+def get_or_create_label(service, name):
+    """Get a Gmail label ID by name, creating it if it doesn't exist."""
+    result = service.users().labels().list(userId="me").execute()
+    for label in result.get("labels", []):
+        if label["name"].lower() == name.lower():
+            return label["id"]
+    # Create it
+    created = service.users().labels().create(
+        userId="me",
+        body={
+            "name": name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        }
+    ).execute()
+    log.info(f"Created label: {name}")
+    return created["id"]
+
+
+def archive_newsletters(service, newsletters_label="Newsletters"):
+    """
+    After the weekly digest is sent:
+    - Get or create a Newsletters/Archive label
+    - For every message in Newsletters label: add Archive label, remove Newsletters label
+    This keeps emails searchable but clears the label for next week's fresh fetch.
+    """
+    log.info("Archiving this week's newsletters…")
+
+    # Get label IDs
+    newsletters_id = None
+    result = service.users().labels().list(userId="me").execute()
+    for label in result.get("labels", []):
+        if label["name"].lower() == newsletters_label.lower():
+            newsletters_id = label["id"]
+            break
+
+    if not newsletters_id:
+        log.warning(f"Label '{newsletters_label}' not found — skipping archive.")
+        return
+
+    archive_id = get_or_create_label(service, f"{newsletters_label}/Archive")
+
+    # Fetch all messages currently in Newsletters label
+    messages = []
+    page_token = None
+    while True:
+        params = dict(userId="me", labelIds=[newsletters_id], maxResults=500)
+        if page_token:
+            params["pageToken"] = page_token
+        result = service.users().messages().list(**params).execute()
+        messages.extend(result.get("messages", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
+    if not messages:
+        log.info("No messages to archive.")
+        return
+
+    log.info(f"Archiving {len(messages)} messages…")
+
+    # Batch modify in groups of 1000 (Gmail API limit)
+    ids = [m["id"] for m in messages]
+    for i in range(0, len(ids), 1000):
+        batch = ids[i:i+1000]
+        service.users().messages().batchModify(
+            userId="me",
+            body={
+                "ids": batch,
+                "addLabelIds": [archive_id],
+                "removeLabelIds": [newsletters_id],
+            }
+        ).execute()
+        log.info(f"  Archived batch {i//1000 + 1} ({len(batch)} messages)")
+
+    log.info(f"✓ Archived {len(messages)} newsletters → {newsletters_label}/Archive")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -327,6 +409,9 @@ def main():
     subject = f"📚 Week in Review — {now.strftime('%B %-d, %Y')}"
     html    = build_weekly_html(emails, digest, now)
     send_email(service, subject, html)
+
+    log.info("[5/5] Archiving this week's newsletters…")
+    archive_newsletters(service, GMAIL_LABEL)
 
     log.info("✅  Done.")
 
