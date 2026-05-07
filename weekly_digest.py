@@ -190,27 +190,23 @@ def build_weekly_html(emails, digest, generated_at):
     week_of  = generated_at.strftime("%B %-d, %Y")
     time_str = generated_at.strftime("%-I:%M %p CT")
 
-    # Top picks
-    top_picks_html = ""
-    for i, pick in enumerate(digest.get("top_picks", []), 1):
+    def top_pick_row(i, pick):
         url = pick.get("url", "")
         link_html = (
-            f'<a href="{url}" style="color:#e8b84b;text-decoration:none;">{pick.get("title","")}</a>'
-            if url else pick.get("title", "")
+            f'<a href="{url}" style="color:#c8401a;text-decoration:none;font-weight:700;">{pick.get("title","")}</a>'
+            if url else f'<span style="font-weight:700;color:#1a1a1a;">{pick.get("title","")}</span>'
         )
-        top_picks_html += f"""
-        <div style="display:flex;gap:12px;margin-bottom:14px;align-items:flex-start;">
-          <div style="font-family:monospace;font-size:18px;font-weight:900;color:#2a2a2a;flex-shrink:0;width:24px;padding-top:2px;">{i}</div>
+        return f"""
+        <div style="display:flex;gap:14px;margin-bottom:16px;align-items:flex-start;">
+          <div style="font-family:monospace;font-size:20px;font-weight:900;color:#ddd;flex-shrink:0;width:26px;padding-top:2px;">{i}</div>
           <div>
-            <div style="font-size:15px;font-weight:700;line-height:1.3;margin-bottom:4px;">{link_html}</div>
-            <div style="font-size:12px;color:#9a9590;line-height:1.5;">{pick.get('why','')}</div>
-            <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#444;margin-top:4px;">via {pick.get('source','')}</div>
+            <div style="font-size:15px;line-height:1.3;margin-bottom:4px;">{link_html}</div>
+            <div style="font-size:12px;color:#777;line-height:1.5;">{pick.get('why','')}</div>
+            <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#bbb;margin-top:4px;">via {pick.get('source','')}</div>
           </div>
         </div>"""
 
-    # Topic groups
-    topics_html = ""
-    for topic in digest.get("topics", []):
+    def topic_card(topic):
         links_html = ""
         for link in topic.get("links", []):
             url = link.get("url", "")
@@ -218,57 +214,54 @@ def build_weekly_html(emails, digest, generated_at):
             source = link.get("source", "")
             if url and title:
                 links_html += f"""
-                <div style="margin-bottom:8px;padding-left:12px;border-left:2px solid #2a2a2a;">
-                  <a href="{url}" style="font-size:13px;font-weight:600;color:#e8b84b;text-decoration:none;line-height:1.4;">{title}</a>
-                  <span style="font-family:monospace;font-size:10px;color:#444;margin-left:8px;">— {source}</span>
+                <div style="margin-bottom:8px;padding-left:12px;border-left:2px solid #e0e0e0;">
+                  <a href="{url}" style="font-size:13px;font-weight:600;color:#c8401a;text-decoration:none;line-height:1.4;">{title}</a>
+                  <span style="font-family:monospace;font-size:10px;color:#aaa;margin-left:8px;">— {source}</span>
                 </div>"""
-
-        topics_html += f"""
-        <div style="background:#141414;border:1px solid #2a2a2a;border-radius:4px;padding:16px 18px;margin-bottom:10px;">
-          <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#4b9ee8;margin-bottom:8px;">{topic.get('name','')}</div>
-          <p style="font-size:13px;line-height:1.6;color:#9a9590;margin:0 0 12px;">{topic.get('summary','')}</p>
+        return f"""
+        <div style="background:#fff;border:1px solid #e8e8e8;border-radius:4px;padding:16px 18px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+          <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#1a6fa8;margin-bottom:8px;">{topic.get('name','')}</div>
+          <p style="font-size:13px;line-height:1.6;color:#555;margin:0 0 12px;">{topic.get('summary','')}</p>
           {links_html}
         </div>"""
 
-    # Sources this week
-    seen_sources = []
+    top_picks_html = "".join(top_pick_row(i+1, p) for i, p in enumerate(digest.get("top_picks", [])))
+    topics_html    = "".join(topic_card(t) for t in digest.get("topics", []))
     seen_set = set()
+    seen_sources = []
     for e in emails:
-        name = e["from"].split("<")[0].strip().strip('"')
+        name = e["from"].split("<")[0].strip().strip('"''"')
         if name not in seen_set:
             seen_set.add(name)
             seen_sources.append(name)
-
-    sources_html = "  ·  ".join(
-        f'<span style="color:#555;">{s}</span>' for s in seen_sources
-    )
+    sources_html = "  ·  ".join(f'<span style="color:#bbb;">{s}</span>' for s in seen_sources)
 
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#0d0d0d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e8e4dc;">
+<body style="margin:0;padding:0;background:#f4f4f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;">
 <div style="max-width:660px;margin:0 auto;padding:24px 16px;">
 
   <!-- Header -->
-  <div style="padding:20px 0 16px;border-bottom:2px solid #2a2a2a;margin-bottom:24px;">
-    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#e8b84b;margin-bottom:8px;">Week in Review</div>
-    <div style="font-size:34px;font-weight:900;color:#e8e4dc;line-height:1;margin-bottom:10px;">
-      Read <span style="font-style:italic;font-weight:300;color:#e8b84b;">Later</span>
+  <div style="padding:20px 0 16px;border-bottom:2px solid #1a1a1a;margin-bottom:24px;">
+    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#c8401a;margin-bottom:8px;">Week in Review</div>
+    <div style="font-size:34px;font-weight:900;color:#1a1a1a;line-height:1;margin-bottom:10px;">
+      Read <span style="font-style:italic;font-weight:300;color:#c8401a;">Later</span>
     </div>
-    <div style="font-family:monospace;font-size:11px;color:#444;">
+    <div style="font-family:monospace;font-size:11px;color:#999;">
       Week of {week_of}&nbsp;&nbsp;·&nbsp;&nbsp;{len(emails)} newsletters&nbsp;&nbsp;·&nbsp;&nbsp;{time_str}
     </div>
   </div>
 
   <!-- Week overview -->
-  <div style="background:#161616;border:1px solid #2a2a2a;border-left:3px solid #e8b84b;border-radius:4px;padding:20px 22px;margin-bottom:24px;">
-    <div style="font-size:20px;font-weight:700;color:#e8e4dc;line-height:1.3;margin-bottom:12px;">{digest.get('week_headline','This Week')}</div>
-    <p style="font-size:14px;line-height:1.8;color:#a0a09a;margin:0;">{digest.get('week_overview','')}</p>
+  <div style="background:#fff;border:1px solid #e0e0e0;border-left:3px solid #c8401a;border-radius:4px;padding:20px 22px;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+    <div style="font-size:20px;font-weight:700;color:#1a1a1a;line-height:1.3;margin-bottom:12px;">{digest.get('week_headline','This Week')}</div>
+    <p style="font-size:14px;line-height:1.8;color:#555;margin:0;">{digest.get('week_overview','')}</p>
   </div>
 
   <!-- Top picks -->
   <div style="margin-bottom:24px;">
-    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#e8b84b;padding-bottom:10px;border-bottom:1px solid #222;margin-bottom:16px;">
+    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#c8401a;padding-bottom:10px;border-bottom:1px solid #e0e0e0;margin-bottom:16px;">
       ★ Top Picks This Week
     </div>
     {top_picks_html}
@@ -276,19 +269,19 @@ def build_weekly_html(emails, digest, generated_at):
 
   <!-- Topics -->
   <div style="margin-bottom:24px;">
-    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#444;padding-bottom:10px;border-bottom:1px solid #222;margin-bottom:12px;">
+    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#aaa;padding-bottom:10px;border-bottom:1px solid #e0e0e0;margin-bottom:12px;">
       By Topic
     </div>
     {topics_html}
   </div>
 
   <!-- Sources -->
-  <div style="padding-top:16px;border-top:1px solid #1a1a1a;font-family:monospace;font-size:10px;text-align:center;line-height:1.8;">
+  <div style="padding-top:16px;border-top:1px solid #e0e0e0;font-family:monospace;font-size:10px;text-align:center;line-height:1.8;">
     {sources_html}
   </div>
 
   <!-- Footer -->
-  <div style="margin-top:12px;font-family:monospace;font-size:10px;color:#2a2a2a;text-align:center;">
+  <div style="margin-top:12px;font-family:monospace;font-size:10px;color:#ccc;text-align:center;">
     Generated {generated_at.strftime("%-I:%M %p CT on %A, %B %-d, %Y")}
   </div>
 

@@ -10,6 +10,7 @@ import sys
 import base64
 import json
 import time
+import re
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -68,17 +69,45 @@ def decode_body(part):
     return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
 
 
-def extract_text(payload):
+SKIP_URL_PATTERNS = [
+    "unsubscribe","pixel","track","click.","open.","beacon",
+    "img","image","logo","cdn","static","font","css","icon",
+    "mailchimp","sendgrid","mandrillapp","sparkpost","constantcontact"
+]
+
+def extract_text_and_links(payload):
+    """Extract plain text and clean article URLs from a Gmail payload."""
     mime = payload.get("mimeType", "")
     parts = payload.get("parts", [])
-    if mime == "text/plain":
-        return decode_body(payload)
-    collected = []
-    for part in parts:
-        t = extract_text(part)
-        if t:
-            collected.append(t)
-    return "\n".join(collected)
+    text = ""
+    if mime in ("text/plain", "text/html"):
+        text = decode_body(payload)
+    else:
+        collected = []
+        for part in parts:
+            t, _ = extract_text_and_links(part)
+            if t:
+                collected.append(t)
+        text = "\n".join(collected)
+
+    urls = re.findall(r'https?://[^\s\'"<>)\]]+', text)
+    clean_urls = []
+    seen = set()
+    for url in urls:
+        url = url.rstrip(".,;)")
+        low = url.lower()
+        if any(s in low for s in SKIP_URL_PATTERNS):
+            continue
+        if url not in seen and len(url) < 300:
+            seen.add(url)
+            clean_urls.append(url)
+
+    clean_text = " ".join(text.split())
+    return clean_text[:2500], clean_urls[:15]
+
+def extract_text(payload):
+    text, _ = extract_text_and_links(payload)
+    return text
 
 
 def fetch_newsletters(service):
@@ -99,14 +128,14 @@ def fetch_newsletters(service):
             userId="me", id=ref["id"], format="full"
         ).execute()
         headers = {h["name"]: h["value"] for h in msg["payload"].get("headers", [])}
-        body = extract_text(msg["payload"])
-        body = " ".join(body.split())  # collapse whitespace
+        body, links = extract_text_and_links(msg["payload"])
         emails.append({
             "subject": headers.get("Subject", "(No subject)"),
             "from":    headers.get("From", "Unknown"),
             "date":    headers.get("Date", ""),
             "body":    body[:2500],
             "snippet": msg.get("snippet", ""),
+            "links":   links[:10],
         })
         log.info(f"  [{i+1}/{len(messages)}] {emails[-1]['from'][:40]} — {emails[-1]['subject'][:50]}")
     return emails
@@ -116,7 +145,7 @@ def fetch_newsletters(service):
 
 def call_claude(client, system, user, max_tokens=1000):
     resp = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-opus-4-5",
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],
@@ -165,18 +194,23 @@ def build_full_briefing(client, emails):
 
 
 def summarize_email(client, email):
+    links_str = " | ".join(email.get("links", [])[:8]) or "none"
     system = (
         'Summarize this newsletter for a busy professional. Specific — name topics, numbers, people. '
-        'Return ONLY valid JSON: {"summary":"2-3 sentences",'
+        'Also pick the 2-3 most interesting article links from the LINKS list provided and label them. '
+        'Return ONLY valid JSON: {'
+        '"summary":"2-3 sentences",'
         '"bullets":["takeaway 1","takeaway 2","takeaway 3","takeaway 4"],'
-        '"tags":["Tag1","Tag2","Tag3"]}'
+        '"tags":["Tag1","Tag2","Tag3"],'
+        '"links":[{"title":"Article title","url":"https://..."}]}'
+        'Only include URLs that actually appear in the LINKS list. Max 3 links. If no good links, return empty array.'
     )
-    user = f"Subject: {email['subject']}\nFrom: {email['from']}\n\n{email['body'][:1800]}"
+    user = f"Subject: {email['subject']}\nFrom: {email['from']}\n\nLINKS: {links_str}\n\n{email['body'][:1600]}"
     raw = call_claude(client, system, user, max_tokens=800)
     try:
         return parse_json(raw)
     except Exception:
-        return {"summary": email.get("snippet", ""), "bullets": [], "tags": []}
+        return {"summary": email.get("snippet", ""), "bullets": [], "tags": [], "links": []}
 
 
 # ── HTML email ────────────────────────────────────────────────────────────────
@@ -190,82 +224,96 @@ def build_html_email(emails, digest, briefing_text, summaries, generated_at):
             emails[si]["from"].split("<")[0].strip()
             for si in theme.get("sources", []) if si < len(emails)
         )
-        src_html = f'<div style="font-size:11px;color:#555;margin-top:6px;">via {sources}</div>' if sources else ""
+        src_html = f'<div style="font-size:11px;color:#999;margin-top:6px;">via {sources}</div>' if sources else ""
         return f"""
-        <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:4px;padding:14px 16px;margin-bottom:8px;">
-          <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#4b9ee8;margin-bottom:6px;">{theme['name']}</div>
-          <div style="font-size:13px;line-height:1.6;color:#9a9590;">{theme['summary']}</div>
+        <div style="background:#f8f8f8;border:1px solid #e0e0e0;border-radius:4px;padding:14px 16px;margin-bottom:8px;">
+          <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#1a6fa8;margin-bottom:6px;">{theme['name']}</div>
+          <div style="font-size:13px;line-height:1.6;color:#555;">{theme['summary']}</div>
           {src_html}
         </div>"""
 
     def nl_card(i, email):
         s = summaries.get(i, {})
-        bullets = "".join(f'<li style="margin-bottom:5px;">{b}</li>' for b in s.get("bullets", []))
-        tags    = "".join(
+        bullets = "".join(f'<li style="margin-bottom:5px;color:#333;">{b}</li>' for b in s.get("bullets", []))
+        tags = "".join(
             f'<span style="display:inline-block;font-family:monospace;font-size:10px;text-transform:uppercase;'
-            f'letter-spacing:1px;padding:2px 7px;background:#1a1a1a;border:1px solid #2a2a2a;'
-            f'border-radius:2px;color:#555;margin:0 4px 4px 0;">{t}</span>'
+            f'letter-spacing:1px;padding:2px 7px;background:#f0f0f0;border:1px solid #ddd;'
+            f'border-radius:2px;color:#888;margin:0 4px 4px 0;">{t}</span>'
             for t in s.get("tags", [])
         )
-        sender = email["from"].split("<")[0].strip().strip('"')
+        raw_links = s.get("links", [])
+        article_links = "".join(
+            f'<div style="margin-bottom:6px;padding-left:10px;border-left:2px solid #ddd;">'
+            f'<a href="{lnk["url"]}" style="font-size:12px;color:#c8401a;text-decoration:none;font-weight:600;">'
+            f'{lnk["title"]}</a></div>'
+            for lnk in raw_links if lnk.get("url") and lnk.get("title")
+        )
+        links_section = (
+            f'<div style="margin-top:10px;padding-top:10px;border-top:1px solid #eee;">'
+            f'<div style="font-family:monospace;font-size:10px;text-transform:uppercase;'
+            f'letter-spacing:1px;color:#aaa;margin-bottom:6px;">Read More</div>'
+            f'{article_links}</div>'
+        ) if article_links else ""
+        sender = email["from"].split("<")[0].strip().strip('"''"')
         return f"""
-        <div style="background:#141414;border:1px solid #2a2a2a;border-radius:4px;margin-bottom:8px;">
-          <div style="padding:12px 16px;border-bottom:1px solid #2a2a2a;">
-            <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#444;margin-bottom:3px;">{sender}</div>
-            <div style="font-size:15px;font-weight:700;color:#e8e4dc;line-height:1.3;">{email['subject']}</div>
+        <div style="background:#fff;border:1px solid #e8e8e8;border-radius:4px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+          <div style="padding:12px 16px;border-bottom:1px solid #f0f0f0;background:#fafafa;border-radius:4px 4px 0 0;">
+            <div style="font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#aaa;margin-bottom:3px;">{sender}</div>
+            <div style="font-size:15px;font-weight:700;color:#1a1a1a;line-height:1.3;">{email['subject']}</div>
           </div>
           <div style="padding:12px 16px;">
-            <p style="font-size:13px;line-height:1.7;color:#9a9590;margin:0 0 10px;">{s.get('summary','')}</p>
-            <ul style="font-size:13px;line-height:1.6;color:#d0ccc4;padding-left:18px;margin:0 0 10px;">{bullets}</ul>
+            <p style="font-size:13px;line-height:1.7;color:#555;margin:0 0 10px;">{s.get('summary','')}</p>
+            <ul style="font-size:13px;line-height:1.6;color:#333;padding-left:18px;margin:0 0 10px;">{bullets}</ul>
             <div>{tags}</div>
+            {links_section}
           </div>
         </div>"""
 
     themes_html   = "".join(theme_card(t) for t in digest.get("themes", []))
     nl_cards_html = "".join(nl_card(i, e) for i, e in enumerate(emails))
     briefing_html = "".join(
-        f'<p style="margin:0 0 16px;font-size:15px;line-height:1.9;color:#c0bcb4;">{p}</p>'
+        f'<p style="margin:0 0 16px;font-size:15px;line-height:1.9;color:#333;">{p}</p>'
         for p in briefing_text.strip().split("\n") if p.strip()
     )
 
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#0d0d0d;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+<body style="margin:0;padding:0;background:#f4f4f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
 <div style="max-width:660px;margin:0 auto;padding:24px 16px;">
 
   <!-- Header -->
-  <div style="padding:20px 0 16px;border-bottom:2px solid #2a2a2a;margin-bottom:24px;">
-    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#e8b84b;margin-bottom:8px;">Your Morning Briefing</div>
-    <div style="font-size:34px;font-weight:900;color:#e8e4dc;line-height:1;margin-bottom:10px;">
-      Morning <span style="font-style:italic;font-weight:300;color:#e8b84b;">Digest</span>
+  <div style="padding:20px 0 16px;border-bottom:2px solid #1a1a1a;margin-bottom:24px;">
+    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#c8401a;margin-bottom:8px;">Your Morning Briefing</div>
+    <div style="font-size:34px;font-weight:900;color:#1a1a1a;line-height:1;margin-bottom:10px;">
+      Morning <span style="font-style:italic;font-weight:300;color:#c8401a;">Digest</span>
     </div>
-    <div style="font-family:monospace;font-size:11px;color:#444;">{today}&nbsp;&nbsp;·&nbsp;&nbsp;{time_str}&nbsp;&nbsp;·&nbsp;&nbsp;{len(emails)} newsletters</div>
+    <div style="font-family:monospace;font-size:11px;color:#999;">{today}&nbsp;&nbsp;·&nbsp;&nbsp;{time_str}&nbsp;&nbsp;·&nbsp;&nbsp;{len(emails)} newsletters</div>
   </div>
 
   <!-- Headline + Overview -->
-  <div style="background:#161616;border:1px solid #2a2a2a;border-left:3px solid #e8b84b;border-radius:4px;padding:20px 22px;margin-bottom:20px;">
-    <div style="font-size:21px;font-weight:700;color:#e8e4dc;line-height:1.3;margin-bottom:12px;">{digest.get('headline','This Morning')}</div>
-    <p style="font-size:14px;line-height:1.8;color:#a0a09a;margin:0;">{digest.get('overview','')}</p>
+  <div style="background:#fff;border:1px solid #e0e0e0;border-left:3px solid #c8401a;border-radius:4px;padding:20px 22px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+    <div style="font-size:21px;font-weight:700;color:#1a1a1a;line-height:1.3;margin-bottom:12px;">{digest.get('headline','This Morning')}</div>
+    <p style="font-size:14px;line-height:1.8;color:#555;margin:0;">{digest.get('overview','')}</p>
   </div>
 
   <!-- Topics -->
-  {"<div style='margin-bottom:20px;'><div style='font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#444;padding-bottom:10px;border-bottom:1px solid #222;margin-bottom:12px;'>Topics This Morning</div>" + themes_html + "</div>" if themes_html else ""}
+  {"<div style='margin-bottom:20px;'><div style='font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#aaa;padding-bottom:10px;border-bottom:1px solid #e0e0e0;margin-bottom:12px;'>Topics This Morning</div>" + themes_html + "</div>" if themes_html else ""}
 
   <!-- Full Briefing -->
-  <div style="background:#111;border:1px solid #2a2a2a;border-radius:4px;padding:22px;margin-bottom:20px;">
-    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#e8b84b;padding-bottom:12px;border-bottom:1px solid #222;margin-bottom:18px;">Full Morning Briefing</div>
+  <div style="background:#fff;border:1px solid #e0e0e0;border-radius:4px;padding:22px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#c8401a;padding-bottom:12px;border-bottom:1px solid #eee;margin-bottom:18px;">Full Morning Briefing</div>
     {briefing_html}
   </div>
 
   <!-- Individual Newsletters -->
   <div style="margin-bottom:20px;">
-    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#444;padding-bottom:10px;border-bottom:1px solid #222;margin-bottom:12px;">Individual Newsletters</div>
+    <div style="font-family:monospace;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#aaa;padding-bottom:10px;border-bottom:1px solid #e0e0e0;margin-bottom:12px;">Individual Newsletters</div>
     {nl_cards_html}
   </div>
 
   <!-- Footer -->
-  <div style="padding-top:16px;border-top:1px solid #1a1a1a;font-family:monospace;font-size:10px;color:#2a2a2a;text-align:center;">
+  <div style="padding-top:16px;border-top:1px solid #e0e0e0;font-family:monospace;font-size:10px;color:#bbb;text-align:center;">
     Generated {generated_at.strftime("%-I:%M %p CT on %A, %B %-d, %Y")}
   </div>
 
