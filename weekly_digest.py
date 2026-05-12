@@ -168,7 +168,7 @@ def build_weekly_digest(client, emails):
         '"top_picks":[{"title":"Story title","why":"One sentence why it matters","url":"best URL from the emails","source":"Newsletter name"}]}\n'
         "Include exactly 5 top_picks. Only use URLs that appear in the LINKS fields. No invented URLs."
     )
-    raw1 = call_claude(client, system1, email_input, max_tokens=1000)
+    raw1 = call_claude(client, system1, email_input, max_tokens=2000)
     try:
         part1 = parse_json(raw1)
     except Exception as e:
@@ -182,7 +182,7 @@ def build_weekly_digest(client, emails):
         "Create 4-6 thematic topic groups. Each topic gets 2-3 links from the email LINKS fields. "
         "Only use URLs that appear in the LINKS fields provided. No invented URLs."
     )
-    raw2 = call_claude(client, system2, email_input, max_tokens=1000)
+    raw2 = call_claude(client, system2, email_input, max_tokens=2000)
     try:
         part2 = parse_json(raw2)
     except Exception as e:
