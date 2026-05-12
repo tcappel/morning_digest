@@ -133,7 +133,7 @@ def fetch_week_newsletters(service):
 
 # ── Claude ────────────────────────────────────────────────────────────────────
 
-def call_claude(client, system, user, max_tokens=1000):
+def call_claude(client, system, user, max_tokens=2000):
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=max_tokens,
@@ -149,40 +149,47 @@ def parse_json(raw):
 
 
 def build_weekly_digest(client, emails):
-    """Build top picks + grouped topics with links from the week's newsletters."""
+    """Build top picks + grouped topics with links. Two calls to stay within token limits."""
 
-    # Build input — include links with each email
+    # Condense input — cap per-email content tightly since we have many emails
     email_input = "\n\n---\n\n".join(
-        f"[{i}] FROM: {e['from']}\nSUBJECT: {e['subject']}\nDATE: {e['date']}\n"
-        f"CONTENT: {e['body'][:600]}\n"
-        f"LINKS FOUND: {' | '.join(e['links'][:8]) if e['links'] else 'none'}"
+        f"[{i}] FROM: {e['from'].split('<')[0].strip()}\n"
+        f"SUBJECT: {e['subject']}\n"
+        f"CONTENT: {e['body'][:400]}\n"
+        f"LINKS: {' | '.join(e.get('links',[])[:5]) if e.get('links') else 'none'}"
         for i, e in enumerate(emails)
     )
 
-    system = (
-        'You are a weekly briefing editor. Analyze this week\'s newsletters and return ONLY valid JSON:\n'
-        '{\n'
-        '  "week_headline": "One punchy headline summarizing the week (max 12 words)",\n'
-        '  "week_overview": "3-4 sentences on the biggest themes and stories of the week",\n'
-        '  "top_picks": [\n'
-        '    { "title": "Story title", "why": "One sentence on why this matters", "url": "best URL for this story", "source": "Newsletter name" }\n'
-        '  ],\n'
-        '  "topics": [\n'
-        '    { "name": "Topic name", "summary": "2-3 sentences", "links": [ { "title": "Link title", "url": "url", "source": "newsletter" } ] }\n'
-        '  ]\n'
-        '}\n'
-        'top_picks: exactly 5-7 of the most interesting/important stories of the week with their best URL.\n'
-        'topics: 4-6 thematic groups, each with 2-4 relevant links extracted from the emails.\n'
-        'Only include URLs that actually appeared in the email content — do not invent URLs.\n'
-        'No markdown, no code fences, just the JSON.'
+    # ── Call 1: headline, overview, top picks ──
+    system1 = (
+        "You are a weekly briefing editor. Return ONLY valid JSON, no markdown, no code fences:\n"
+        '{"week_headline":"One punchy headline max 12 words",'
+        '"week_overview":"3-4 sentences on the biggest themes this week. Be specific.",'
+        '"top_picks":[{"title":"Story title","why":"One sentence why it matters","url":"best URL from the emails","source":"Newsletter name"}]}\n'
+        "Include exactly 5 top_picks. Only use URLs that appear in the LINKS fields. No invented URLs."
     )
-
-    raw = call_claude(client, system, email_input, max_tokens=1000)
+    raw1 = call_claude(client, system1, email_input, max_tokens=1000)
     try:
-        return parse_json(raw)
+        part1 = parse_json(raw1)
     except Exception as e:
-        log.warning(f"JSON parse failed: {e}\nRaw: {raw[:200]}")
-        return {"week_headline": "This Week in Newsletters", "week_overview": "", "top_picks": [], "topics": []}
+        log.warning(f"Part 1 JSON parse failed: {e}\nRaw: {raw1[:300]}")
+        part1 = {"week_headline": "This Week in Newsletters", "week_overview": "", "top_picks": []}
+
+    # ── Call 2: topics with links ──
+    system2 = (
+        "You are a weekly briefing editor. Return ONLY valid JSON, no markdown, no code fences:\n"
+        '{"topics":[{"name":"Topic name","summary":"2-3 sentences","links":[{"title":"Article title","url":"url","source":"newsletter"}]}]}\n'
+        "Create 4-6 thematic topic groups. Each topic gets 2-3 links from the email LINKS fields. "
+        "Only use URLs that appear in the LINKS fields provided. No invented URLs."
+    )
+    raw2 = call_claude(client, system2, email_input, max_tokens=1000)
+    try:
+        part2 = parse_json(raw2)
+    except Exception as e:
+        log.warning(f"Part 2 JSON parse failed: {e}\nRaw: {raw2[:300]}")
+        part2 = {"topics": []}
+
+    return {**part1, **part2}
 
 
 # ── HTML email ────────────────────────────────────────────────────────────────
