@@ -102,7 +102,7 @@ def extract_text_and_links(payload):
 
 def fetch_week_newsletters(service):
     """Fetch all newsletters from the past 5 days."""
-    query = f"label:{GMAIL_LABEL} newer_than:5d"
+    query = f"label:{GMAIL_LABEL} OR label:{GMAIL_LABEL}/Archive newer_than:5d"
     log.info(f"Gmail query: {query}")
     result = service.users().messages().list(
         userId="me", q=query, maxResults=50
