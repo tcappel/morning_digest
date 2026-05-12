@@ -2,8 +2,8 @@ name: Morning Digest
 
 on:
   schedule:
-    - cron: '30 13 * * 1-5'  # 8:30 AM CT (CDT UTC-5) Mon-Fri — daily digest
-    - cron: '0 18 * * 5'     # 12:00 PM CT (CDT UTC-5) Friday — weekly read later
+    - cron: '30 13 * * 1-5'  # 8:30 AM CT Mon-Fri — daily digest
+    - cron: '0 18 * * 5'     # 12:00 PM CT Friday — weekly read later
   workflow_dispatch:
     inputs:
       mode:
@@ -17,7 +17,9 @@ on:
 
 jobs:
   daily-digest:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily' || github.event.schedule == '30 13 * * 1-5'
+    if: >
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily') ||
+      (github.event_name == 'schedule' && github.event.schedule == '30 13 * * 1-5')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +39,9 @@ jobs:
         run: python digest.py
 
   weekly-digest:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'weekly' || github.event.schedule == '0 18 * * 5'
+    if: >
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'weekly') ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 18 * * 5')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
